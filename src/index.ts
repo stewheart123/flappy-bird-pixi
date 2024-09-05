@@ -1,7 +1,4 @@
 import { Application, Sprite, Texture, TilingSprite } from 'pixi.js';
-import { TonClient4, Address, beginCell } from '@ton/ton';
-import { TonConnectUI } from '@tonconnect/ui';
-import {getHttpV4Endpoint, Network} from '@orbs-network/ton-access';
 import { environment } from "./environments/environment";
 
 (window as any).Telegram.WebApp.expand();
@@ -76,6 +73,7 @@ class Game {
     }
 
     init() {
+        console.log("init");
         const BACKGROUND_SCALE = GAME_HEIGHT / BACKGROUND_HEIGHT;
         const background = new TilingSprite(this.backgroundTex, this.REAL_GAME_WIDTH, GAME_HEIGHT);
         background.tileScale = {
@@ -102,12 +100,13 @@ class Game {
             }
         });
 
+        // bird out of bounds up or down
         this.app.ticker.add(() => {
             if (this.bird.y < 0 || this.bird.y > GAME_HEIGHT - this.bird.height) {
                 this.onOverlapped();
                 return;
             }
-
+        // keeps checking if y value of bird is not overlapping.
             for (const pp of this.pipes) {
                 if (!(this.bird.x > pp.p1.x - this.bird.width && this.bird.x < pp.p1.x + PIPE_WIDTH)) continue;
                 if (this.bird.y < pp.p1.y || this.bird.y > pp.p2.y - this.bird.height) {
@@ -121,9 +120,10 @@ class Game {
         window.addEventListener('keydown', () => { this.onClick() });
 
         this.app.ticker.add((delta) => {
+            console.log("ticker");
             this.pipeInterval += PIPE_INTERVAL_ACCEL * delta;
             this.pipeVelocity += PIPE_VELOCITY_ACCEL * delta;
-            if (Date.now() > this.lastPipeSpawned + this.pipeInterval) {
+           if (Date.now() > this.lastPipeSpawned + this.pipeInterval) {
                 this.lastPipeSpawned = Date.now();
                 const gapStart = GAP_START + Math.random() * (GAP_END - GAP_START);
                 const gapSize = GAP_MIN + Math.random() * (GAP_MAX - GAP_MIN);
@@ -156,16 +156,19 @@ class Game {
         });
 
         ui.onPlayClicked(() => {
-            ui.hideShop();
+            // ui.hideShop();
             ui.hideMain();
-
             this.restart();
+            this.app.ticker.start();
         });
 
         // dirty hack to make the textures load
         this.app.ticker.addOnce(() => {
             this.app.stop();
         });
+        
+        //this.app.ticker.start();
+        //this.app.stop();
     }
 
     newPipe() {
@@ -189,10 +192,11 @@ class Game {
         this.birdVelocity = 0;
         this.lastJump = 0;
         this.bird.y = GAME_HEIGHT / 2;
-        this.app.start();
+       // this.app.start();
     }
 
     onClick() {
+        console.log("onclick");
         if (Date.now() > this.lastJump + JUMP_COOLDOWN) {
             this.lastJump = Date.now();
             this.birdVelocity = JUMP_VELOCITY;
@@ -201,71 +205,29 @@ class Game {
 
     async onOverlapped() {
         this.app.stop();
-
-        ui.showLoading();
-
-        try {
-            const playedInfo = await submitPlayed(this.score) as any;
-
-            if (!playedInfo.ok) throw new Error('Unsuccessful');
-
-            ui.showMain(true, {
-                reward: playedInfo.reward,
-                achievements: playedInfo.achievements.map((a: string) => achievements[a]),
-            });
-        } catch (e) {
-            console.error(e);
-
-            ui.showMain(true, {
-                error: 'Could not load your rewards information',
-            });
-        }
-
+        ui.showLoading();        
+        ui.showMain(false);
         ui.hideLoading();
+        this.restart();
     }
 }
-
-// UI
 
 const achievements: { [k: string]: string } = {
     'first-time': 'Played 1 time',
     'five-times': 'Played 5 times',
 };
 
-async function submitPlayed(score: number) {
-    return await (await fetch(ENDPOINT + '/played', {
-        body: JSON.stringify({
-            tg_data: (window as any).Telegram.WebApp.initData,
-            wallet: tc.account?.address,
-            score,
-        }),
-        headers: {
-            'content-type': 'application/json',
-            'ngrok-skip-browser-warning': 'true'
-        },
-        method: 'POST',
-    })).json();
-}
-
-const tc = new TonConnectUI({
-    manifestUrl: 'https://raw.githubusercontent.com/ton-defi-org/tonconnect-manifest-temp/main/tonconnect-manifest.json',
-});
-
 const PIPES_AVAILABLE = ['pipe-green', 'pipe-red'];
 const PIPES_COSTS = [0, 1];
 const SHOP_RELOAD_INTERVAL = 10000;
-const BALANCE_RELOAD_INTERVAL = 10000;
 
 const ENDPOINT = environment.ENDPOINT;
-// const TOKEN_RECIPIENT = environment.TOKEN_RECIPIENT;
-// const TOKEN_MASTER = environment.TOKEN_MASTER;
-// const NETWORK = environment.NETWORK;
 
 class UI {
     scoreDiv: HTMLDivElement = document.getElementById('score') as HTMLDivElement;
     rewardsDiv: HTMLDivElement = document.getElementById('rewards') as HTMLDivElement;
     spinnerDiv: HTMLDivElement = document.getElementById('spinner-container') as HTMLDivElement;
-    connectDiv: HTMLDivElement = document.getElementById('connect') as HTMLDivElement;
+    // connectDiv: HTMLDivElement = document.getElementById('connect') as HTMLDivElement;
     skinChooserDiv: HTMLDivElement = document.getElementById('skin-chooser') as HTMLDivElement;
     skinPrevDiv: HTMLDivElement = document.getElementById('skin-prev') as HTMLDivElement;
     skinCurrentDiv: HTMLDivElement = document.getElementById('skin-current') as HTMLDivElement;
@@ -293,102 +255,6 @@ class UI {
 
     reloadShopTimeout: any = undefined;
 
-    client: TonClient4 | undefined = undefined;
-    jettonWallet: Address | undefined = undefined;
-
-    async redrawBalance() {
-        const bal = await this.getBalance();
-        this.balanceDiv.innerText = bal.toString();
-        this.balanceContainerDiv.style.display = 'block';
-        setTimeout(() => this.redrawBalance(), BALANCE_RELOAD_INTERVAL);
-    }
-
-    async getBalance() {
-        try {
-            const client = await this.getClient();
-            const jw = await this.getJettonWallet();
-            const last = await client.getLastBlock();
-            const r = await client.runMethod(last.last.seqno, jw, 'get_wallet_data');
-            return r.reader.readBigNumber();
-        } catch (e) {
-            return BigInt(0);
-        }
-    }
-
-    // TODO: FIX ME - INCONSISTENT BETWEEN SERVER AND CLIENT
-    async getJettonWallet() {
-        if (this.jettonWallet === undefined) {
-            const TOKEN_MASTER = await this.getTokenMinter();
-
-            const client = await this.getClient();
-            if (tc.account === null) {
-                throw new Error('No account');
-            }
-            const lastBlock = await client.getLastBlock();
-            const r = await client.runMethod(lastBlock.last.seqno, Address.parse(TOKEN_MASTER), 'get_wallet_address', [{
-                type: 'slice',
-                cell: beginCell().storeAddress(Address.parse(tc.account.address)).endCell(),
-            }]);
-            const addrItem = r.result[0];
-            if (addrItem.type !== 'slice') throw new Error('Bad type');
-            this.jettonWallet = addrItem.cell.beginParse().loadAddress();
-        }
-        return this.jettonWallet;
-    }
-
-    async getClient() {
-        if (this.client === undefined) {
-            const NETWORK = await this.getNetwork();
-
-            this.client = new TonClient4({
-                endpoint: await getHttpV4Endpoint({ network: NETWORK }),
-            });
-        }
-        return this.client;
-    }
-
-    async buy(itemId: number) {
-      const TOKEN_RECIPIENT = await this.getTokenRecipient();
-
-      await tc.sendTransaction({
-        validUntil: Math.floor(Date.now() / 1000) + 3600,
-        messages: [
-          {
-            address: (await this.getJettonWallet()).toString(),
-            amount: '50000000',
-            payload: beginCell().storeUint(0x0f8a7ea5, 32).storeUint(0, 64).storeCoins(PIPES_COSTS[this.previewPipeIndex]).storeAddress(Address.parse(TOKEN_RECIPIENT)).storeAddress(Address.parse(tc.account!.address)).storeMaybeRef(undefined).storeCoins(1).storeMaybeRef(beginCell().storeUint(0, 32).storeStringTail((window as any).Telegram.WebApp.initDataUnsafe.user.id + ':' + itemId)).endCell().toBoc().toString('base64'),
-          },
-        ],
-      })
-    }
-
-    constructor() {
-        this.skinPrevDiv.addEventListener('click', () => {
-            this.previewPipeIndex--;
-            this.redrawShop();
-        });
-        this.skinNextDiv.addEventListener('click', () => {
-            this.previewPipeIndex++;
-            this.redrawShop();
-        });
-        this.useButton.addEventListener('click', () => {
-            if (this.previewPipeIndex !== 0 && this.purchases.findIndex(p => p.systemName === this.getPreviewPipe()) === -1) {
-                this.buy(this.previewPipeIndex);
-                return;
-            }
-            this.currentPipeIndex = this.previewPipeIndex;
-            window.localStorage.setItem('chosen-pipe', this.currentPipeIndex.toString());
-            this.redrawShop();
-        });
-        this.shopButton.addEventListener('click', () => {
-            if (this.shopShown) this.hideShop();
-            else this.showShop();
-        });
-        this.connectDiv.addEventListener('click', async () => {
-            await tc.openModal();
-        });
-    }
-
     showLoading() {
         this.spinnerDiv.style.display = 'unset';
     }
@@ -398,6 +264,7 @@ class UI {
     }
 
     showMain(again: boolean, results?: { reward: 0, achievements: string[] } | { error: string }) {
+        console.log("in show main");
         if (again) {
             this.playButton.classList.add('button-wide');
             this.playTextDiv.innerText = 'Play again';
@@ -480,87 +347,6 @@ class UI {
         this.reloadShopTimeout = setTimeout(() => this.reloadPurchases(), SHOP_RELOAD_INTERVAL);
     }
 
-    async getConfig(): Promise<{
-      ok: false
-    } | {
-      ok: true,
-      config: {
-        network: Network,
-        tokenMinter: string,
-        tokenRecipient: string,
-        achievementCollection: Record<string, string>,
-      }
-    }> {
-      return await (await fetch(ENDPOINT + '/config', {
-        headers: {
-          'ngrok-skip-browser-warning': 'true'
-        }
-      })).json();
-    }
-
-    async getNetwork(): Promise<Network> {
-        const config = await this.getConfig();
-        if (!config.ok) throw new Error('Unsuccessful');
-        return config.config.network;
-    }
-
-    async getTokenMinter(): Promise<string> {
-        const config = await this.getConfig();
-        if (!config.ok) throw new Error('Unsuccessful');
-        return config.config.tokenMinter;
-    }
-
-    async getTokenRecipient(): Promise<string> {
-        const config = await this.getConfig();
-        if (!config.ok) throw new Error('Unsuccessful');
-        return config.config.tokenRecipient;
-    }
-
-    async showShop() {
-        this.afterGameDiv.style.display = 'none';
-        this.hideMain();
-        this.showLoading();
-
-        try {
-            const purchasesData = await (
-              await fetch(ENDPOINT + '/purchases?auth=' + encodeURIComponent((window as any).Telegram.WebApp.initData), {
-                headers: {
-                  'ngrok-skip-browser-warning': 'true'
-                }
-              })
-            ).json();
-            if (!purchasesData.ok) throw new Error('Unsuccessful');
-
-            this.hideLoading();
-            this.showMain(false);
-
-            this.purchases = purchasesData.purchases;
-        } catch (e) {
-            this.hideLoading();
-            this.showMain(false, {
-                error: 'Could not load the shop',
-            });
-            return;
-        }
-
-        this.reloadShopTimeout = setTimeout(() => this.reloadPurchases(), SHOP_RELOAD_INTERVAL);
-
-        this.shopShown = true;
-        this.skinChooserDiv.style.display = 'flex';
-        this.useButton.style.display = 'flex';
-        this.previewPipeIndex = this.currentPipeIndex;
-        this.redrawShop();
-    }
-
-    hideShop() {
-        clearTimeout(this.reloadShopTimeout);
-        this.reloadShopTimeout = undefined;
-        this.shopShown = false;
-        this.skinChooserDiv.style.display = 'none';
-        this.useButton.style.display = 'none';
-        this.afterGameDiv.style.display = 'block';
-    }
-
     setScore(score: number) {
         this.scoreDiv.innerText = score.toString();
     }
@@ -570,7 +356,7 @@ class UI {
     }
 
     transitionToGame() {
-        this.connectDiv.style.display = 'none';
+        //this.connectDiv.style.display = 'none';
         this.scoreDiv.style.display = 'inline-block';
         this.buttonsDiv.style.display = 'flex';
     }
@@ -579,12 +365,5 @@ class UI {
 const ui = new UI();
 
 let game: Game | null = null;
-
-tc.onStatusChange((wallet) => {
-    if (game === null && wallet !== null) {
-        ui.transitionToGame();
-        ui.showMain(false);
-        ui.redrawBalance();
-        game = new Game();
-    }
-});
+ui.transitionToGame();
+game = new Game();
